@@ -2,59 +2,54 @@
 anomaly_detector.py
 ===================
 Phases 8–11: Unsupervised Anomaly Detection & Risk Scoring
----------------------------------------------------------
+
 Pipeline:
-  8.  Isolation Forest on GNN transaction embeddings
-  9.  Robust risk normalization (rank fallback)
- 10.  Percentile-based fraud selection
- 11.  BLOCK / MONITOR / ALLOW decisions
+1. Load GNN transaction embeddings
+2. Apply Isolation Forest
+3. Convert anomaly scores → risk scores
+4. Normalize scores (with fallback if needed)
+5. Generate BLOCK / MONITOR / ALLOW decisions
+6. Save results
 """
 
 import os
-import pickle
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import MinMaxScaler
 
-# ─────────────────────────────────────────────────────────────
-# CONFIGURATION
-# ─────────────────────────────────────────────────────────────
+
+# ---------------------------------------------------------
+# PATH CONFIGURATION
+# ---------------------------------------------------------
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-GRAPH_PATH = os.path.join(BASE_DIR, "data", "graph", "transaction_graph.pkl")
-EMB_PATH   = os.path.join(BASE_DIR, "data", "graph", "txn_embeddings.npy")
-OUT_DIR    = os.path.join(BASE_DIR, "data", "output")
-OUT_PATH   = os.path.join(OUT_DIR, "fraud_scores.csv")
+EMB_PATH = os.path.join(BASE_DIR, "data", "graph", "txn_embeddings.npy")
 
-os.makedirs(OUT_DIR, exist_ok=True)
+OUTPUT_DIR = os.path.join(BASE_DIR, "data", "output")
+OUTPUT_PATH = os.path.join(OUTPUT_DIR, "fraud_scores.csv")
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
+# ---------------------------------------------------------
+# MAIN FUNCTION
+# ---------------------------------------------------------
 def main():
 
     print("=" * 60)
-    print("PHASE 8 — Isolation Forest on GNN Embeddings")
+    print("PHASE 8 — Isolation Forest on GNN Transaction Embeddings")
     print("=" * 60)
 
     # ---------------------------------------------------------
     # Load embeddings
     # ---------------------------------------------------------
     X = np.load(EMB_PATH)
-    print(f"Loaded embeddings: {X.shape}")
+
+    print("Transaction embeddings loaded:", X.shape)
 
     # ---------------------------------------------------------
-    # Load graph (transaction IDs)
-    # ---------------------------------------------------------
-    with open(GRAPH_PATH, "rb") as f:
-        G = pickle.load(f)
-
-    txn_ids = [n for n, d in G.nodes(data=True) if d.get("type") == "transaction"]
-
-    if len(txn_ids) != X.shape[0]:
-        print("Warning: Txn ID mismatch — using indices.")
-        txn_ids = [f"txn_{i}" for i in range(X.shape[0])]
-
-    # ---------------------------------------------------------
-    # Isolation Forest
+    # Train Isolation Forest
     # ---------------------------------------------------------
     iso = IsolationForest(
         n_estimators=200,
@@ -63,64 +58,74 @@ def main():
         n_jobs=-1
     )
 
-    print("\nFitting Isolation Forest...")
+    print("\nTraining Isolation Forest...")
     iso.fit(X)
 
-    raw_scores = iso.decision_function(X)
+    scores = iso.decision_function(X)
 
-    # Convert so higher = more anomalous
-    anomaly_scores = -raw_scores
+    # convert so higher = more anomalous
+    anomaly_scores = -scores
 
     # ---------------------------------------------------------
-    # PHASE 9 — Robust Risk Scaling
+    # Normalize risk scores
     # ---------------------------------------------------------
-    max_score = anomaly_scores.max()
+    print("\nNormalizing risk scores...")
 
-    if max_score == 0 or np.isnan(max_score):
-        # Rank fallback if flat
+    if anomaly_scores.max() - anomaly_scores.min() < 1e-6:
+
+        # fallback if scores are flat
         ranks = anomaly_scores.argsort().argsort()
         risk_scores = ranks / ranks.max()
-        print("Used rank-based risk (flat score fallback).")
+
+        print("Used rank-based fallback normalization.")
+
     else:
-        risk_scores = anomaly_scores / max_score
+
+        scaler = MinMaxScaler()
+
+        risk_scores = scaler.fit_transform(
+            anomaly_scores.reshape(-1, 1)
+        ).flatten()
 
     # ---------------------------------------------------------
-    # PHASE 10 — Rank-based Fraud Selection (Top 5%)
+    # Decision Logic
     # ---------------------------------------------------------
-    cutoff = int(0.95 * len(risk_scores))
-    sorted_idx = np.argsort(risk_scores)
-
-    fraud_mask = np.zeros(len(risk_scores), dtype=bool)
-    fraud_mask[sorted_idx[cutoff:]] = True
-
     decisions = []
-    synthetic_fraud = []
+    predicted_fraud = []
 
-    for score, is_fraud in zip(risk_scores, fraud_mask):
+    for score in risk_scores:
 
-        if is_fraud:
+        if score > 0.80:
             decisions.append("BLOCK")
-            synthetic_fraud.append(1)
+            predicted_fraud.append(1)
 
-        elif score > 0.5:
+        elif score > 0.60:
             decisions.append("MONITOR")
-            synthetic_fraud.append(0)
+            predicted_fraud.append(0)
 
         else:
             decisions.append("ALLOW")
-            synthetic_fraud.append(0)
+            predicted_fraud.append(0)
 
     # ---------------------------------------------------------
-    # PHASE 11 — Save CSV
+    # Generate Transaction IDs
+    # ---------------------------------------------------------
+    txn_ids = [f"txn_{i}" for i in range(len(risk_scores))]
+
+    # ---------------------------------------------------------
+    # Create DataFrame
     # ---------------------------------------------------------
     df = pd.DataFrame({
-        "txn_id": txn_ids,
+        "transaction_id": txn_ids,
         "risk_score": np.round(risk_scores, 4),
-        "is_fraud_synthetic": synthetic_fraud,
+        "predicted_fraud": predicted_fraud,
         "decision": decisions
     })
 
-    df.to_csv(OUT_PATH, index=False)
+    # ---------------------------------------------------------
+    # Save results
+    # ---------------------------------------------------------
+    df.to_csv(OUTPUT_PATH, index=False)
 
     # ---------------------------------------------------------
     # Summary
@@ -128,13 +133,19 @@ def main():
     print("\n------------------------------")
     print("PIPELINE SUMMARY")
     print("------------------------------")
+
     print(df["decision"].value_counts())
+
     print("------------------------------")
-    print(f"Average Risk Score: {df['risk_score'].mean():.4f}")
+    print("Average Risk Score:", df["risk_score"].mean())
+
     print("=" * 60)
 
-    print("\nSaved:", OUT_PATH)
+    print("\nResults saved at:", OUTPUT_PATH)
 
 
+# ---------------------------------------------------------
+# RUN SCRIPT
+# ---------------------------------------------------------
 if __name__ == "__main__":
     main()

@@ -1,21 +1,7 @@
-"""
-train_gnn.py
-============
-UPI Fraud Detection — GCN Training Pipeline
---------------------------------------------
-Steps covered:
-  1. Load the NetworkX graph from transaction_graph.pkl
-  2. Convert it to PyTorch Geometric (PyG) HeteroData / homogeneous Data
-  3. Build a 2-layer Graph Convolutional Network (GCN)
-  4. Train on transaction nodes for binary fraud classification
-  5. Evaluate with precision, recall, and F1-score
-  6. Extract and save node embeddings
-"""
-
 import os
 import pickle
 import warnings
-
+import pandas as pd
 import numpy as np
 import networkx as nx
 import torch
@@ -29,27 +15,32 @@ from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings("ignore")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 0. REPRODUCIBILITY
-# ─────────────────────────────────────────────────────────────────────────────
 SEED = 42
 torch.manual_seed(SEED)
 np.random.seed(SEED)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 1. PATH CONFIGURATION
-# ─────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------
+# PATH CONFIGURATION
+# ------------------------------------------------
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-GRAPH_PATH = os.path.join(BASE_DIR, "data", "graph", "transaction_graph.pkl")
-EMBEDDINGS_DIR = os.path.join(BASE_DIR, "data", "graph")
-EMBEDDINGS_PATH = os.path.join(EMBEDDINGS_DIR, "node_embeddings.npy")
+
+GRAPH_PATH            = os.path.join(BASE_DIR, "data", "graph", "transaction_graph.pkl")
+
+# FIX 1: Load the CLEANED dataset, not the raw one
+# Raw dataset had label-leakage columns and unencoded strings
+DATASET_PATH          = os.path.join(BASE_DIR, "data", "processed", "fraud_dataset_cleaned.csv")
+
+EMBEDDINGS_DIR        = os.path.join(BASE_DIR, "data", "graph")
+EMBEDDINGS_PATH       = os.path.join(EMBEDDINGS_DIR, "node_embeddings.npy")
 EMBEDDING_LABELS_PATH = os.path.join(EMBEDDINGS_DIR, "node_labels.npy")
+TXN_EMBEDDINGS_PATH   = os.path.join(EMBEDDINGS_DIR, "txn_embeddings.npy")
+TXN_LABELS_PATH       = os.path.join(EMBEDDINGS_DIR, "txn_labels.npy")
 
 os.makedirs(EMBEDDINGS_DIR, exist_ok=True)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 2. LOAD NETWORKX GRAPH
-# ─────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------
+# STEP 1 — LOAD GRAPH
+# ------------------------------------------------
 print("=" * 60)
 print("STEP 1 — Loading NetworkX graph")
 print("=" * 60)
@@ -57,314 +48,307 @@ print("=" * 60)
 with open(GRAPH_PATH, "rb") as f:
     G: nx.Graph = pickle.load(f)
 
-print(f"  Nodes : {G.number_of_nodes():,}")
-print(f"  Edges : {G.number_of_edges():,}")
+print("Nodes :", G.number_of_nodes())
+print("Edges :", G.number_of_edges())
 
-# Quick sample to inspect available attributes
-sample_nodes = list(G.nodes(data=True))[:8]
-print("\n  Sample node attributes:")
-for n, d in sample_nodes:
-    print(f"    {n}: {d}")
+# ------------------------------------------------
+# STEP 2 — LOAD CLEANED DATASET FOR LABELS + FEATURES
+# ------------------------------------------------
+print("\nSTEP 2 — Loading cleaned dataset for fraud labels and features")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 3. BUILD FEATURE MATRIX & LABELS
-# ─────────────────────────────────────────────────────────────────────────────
-print("\n" + "=" * 60)
-print("STEP 2 — Converting to PyTorch Geometric Data")
-print("=" * 60)
+df = pd.read_csv(DATASET_PATH)
+print(f"Dataset shape  : {df.shape}")
+print(f"Fraud rate     : {df['is_fraud'].mean():.2%}")
 
-# Assign a contiguous integer index to every node
-all_nodes = list(G.nodes())
+# FIX 2: is_fraud used ONLY as label — never as a node feature
+fraud_map = dict(zip(df["transaction_id"], df["is_fraud"]))
+
+# FIX 3: Use all 53 cleaned features for transaction nodes
+# Old code only used 3 hand-picked fields (amount, velocity, failed_count)
+FEATURE_COLS = [c for c in df.columns
+                if c not in {"transaction_id", "user_id", "merchant_id",
+                             "device_id", "is_fraud"}]
+
+print(f"Transaction feature columns : {len(FEATURE_COLS)}")
+
+txn_feature_map = dict(zip(df["transaction_id"],
+                           df[FEATURE_COLS].values.tolist()))
+
+TXN_FEAT_DIM = len(FEATURE_COLS)   # 53
+
+# ------------------------------------------------
+# STEP 3 — NODE INDEXING
+# ------------------------------------------------
+all_nodes   = list(G.nodes())
 node_to_idx = {n: i for i, n in enumerate(all_nodes)}
-num_nodes = len(all_nodes)
+num_nodes   = len(all_nodes)
 
-# ── Feature dimensions per node type ─────────────────────────────────────────
-# transaction : amount, transaction_velocity, failed_transaction_count, is_fraud  → 4 dims used as features (is_fraud excluded for feature, kept as label)
-# user        : total_txn, avg_amount, fraud_ratio, unique_merchants, unique_devices → 5 dims
-# merchant    : total_txn, fraud_ratio, unique_users                               → 3 dims
-# device      : total_txn, unique_users                                            → 2 dims
-#
-# Strategy: build a common feature vector of length MAX_DIM, zero-padding shorter ones.
-MAX_DIM = 5  # max feature width
+# FIX 4: Feature matrix uses TXN_FEAT_DIM (53) for all node types
+# Non-transaction nodes get aggregate stats in first few dims, rest zero-padded
+# Old code used MAX_DIM=5 which discarded 48 transaction feature dimensions
+features = np.zeros((num_nodes, TXN_FEAT_DIM), dtype=np.float32)
+labels   = np.full(num_nodes, -1, dtype=np.int64)
 
-features = np.zeros((num_nodes, MAX_DIM), dtype=np.float32)
-labels = np.full(num_nodes, -1, dtype=np.int64)   # -1 = non-transaction node
-txn_indices = []  # global indices of transaction nodes
+txn_indices = []
 
-for node, data in G.nodes(data=True):
-    idx = node_to_idx[node]
-    ntype = data.get("type", "")
+# ------------------------------------------------
+# STEP 4 — FEATURE + LABEL ASSIGNMENT
+# ------------------------------------------------
+print("\nSTEP 4 — Assigning node features and labels")
 
-    if ntype == "transaction":
-        features[idx, 0] = float(data.get("amount", 0.0))
-        features[idx, 1] = float(data.get("transaction_velocity", 0.0))
-        features[idx, 2] = float(data.get("failed_transaction_count", 0.0))
-        # is_fraud is the label, not a feature
-        label = int(data.get("is_fraud", 0))
-        labels[idx] = label
+for node, data_node in G.nodes(data=True):
+
+    idx       = node_to_idx[node]
+    node_type = data_node.get("type", "")
+
+    if node_type == "transaction":
+
+        txn_id = node.replace("txn_", "")
+
+        # FIX 5: Full 53-feature vector from cleaned dataset
+        feat = txn_feature_map.get(txn_id)
+        if feat is not None:
+            features[idx] = feat
+
+        # FIX 6: is_fraud assigned as label only, NOT included in features
+        labels[idx] = fraud_map.get(txn_id, 0)
         txn_indices.append(idx)
 
-    elif ntype == "user":
-        features[idx, 0] = float(data.get("total_txn", 0.0))
-        features[idx, 1] = float(data.get("avg_amount", 0.0))
-        features[idx, 2] = float(data.get("fraud_ratio", 0.0))
-        features[idx, 3] = float(data.get("unique_merchants", 0.0))
-        features[idx, 4] = float(data.get("unique_devices", 0.0))
+    elif node_type == "user":
+        features[idx, 0] = float(data_node.get("total_txn", 0))
+        features[idx, 1] = float(data_node.get("avg_amount", 0))
+        features[idx, 2] = float(data_node.get("fraud_ratio", 0))
+        features[idx, 3] = float(data_node.get("unique_merchants", 0))
+        features[idx, 4] = float(data_node.get("unique_devices", 0))
 
-    elif ntype == "merchant":
-        features[idx, 0] = float(data.get("total_txn", 0.0))
-        features[idx, 1] = float(data.get("fraud_ratio", 0.0))
-        features[idx, 2] = float(data.get("unique_users", 0.0))
+    elif node_type == "merchant":
+        features[idx, 0] = float(data_node.get("total_txn", 0))
+        features[idx, 1] = float(data_node.get("fraud_ratio", 0))
+        features[idx, 2] = float(data_node.get("unique_users", 0))
 
-    elif ntype == "device":
-        features[idx, 0] = float(data.get("total_txn", 0.0))
-        features[idx, 1] = float(data.get("unique_users", 0.0))
+    elif node_type == "device":
+        features[idx, 0] = float(data_node.get("total_txn", 0))
+        features[idx, 1] = float(data_node.get("unique_users", 0))
 
-# ── Normalise features ────────────────────────────────────────────────────────
-scaler = StandardScaler()
-features = scaler.fit_transform(features).astype(np.float32)
+# ------------------------------------------------
+# STEP 5 — NORMALIZE FEATURES
+# ------------------------------------------------
+scaler   = StandardScaler()
+features = scaler.fit_transform(features)
 
 x = torch.tensor(features, dtype=torch.float)
-y = torch.tensor(labels, dtype=torch.long)
+y = torch.tensor(labels,   dtype=torch.long)
 
-txn_mask = torch.zeros(num_nodes, dtype=torch.bool)
-txn_mask[txn_indices] = True
+txn_indices = np.array(txn_indices)
+txn_labels  = labels[txn_indices]
 
-print(f"  Total nodes              : {num_nodes:,}")
-print(f"  Transaction nodes        : {txn_mask.sum().item():,}")
-print(f"  Feature dimension        : {MAX_DIM}")
+fraud_count = int((txn_labels == 1).sum())
+legit_count = int((txn_labels == 0).sum())
 
-# ── Build edge index ──────────────────────────────────────────────────────────
-src_list, dst_list = [], []
+print(f"\nTotal nodes       : {num_nodes}")
+print(f"Transaction nodes : {len(txn_indices)}")
+print(f"Fraud txns        : {fraud_count}")
+print(f"Legit txns        : {legit_count}")
+
+# ------------------------------------------------
+# STEP 6 — BUILD EDGE INDEX
+# ------------------------------------------------
+src = []
+dst = []
+
 for u, v in G.edges():
-    i, j = node_to_idx[u], node_to_idx[v]
-    # Undirected → add both directions
-    src_list.extend([i, j])
-    dst_list.extend([j, i])
+    i = node_to_idx[u]
+    j = node_to_idx[v]
+    src.extend([i, j])
+    dst.extend([j, i])
 
-edge_index = torch.tensor([src_list, dst_list], dtype=torch.long)
+edge_index = torch.tensor([src, dst], dtype=torch.long)
 
-# ── PyG Data object ───────────────────────────────────────────────────────────
-data = Data(x=x, edge_index=edge_index, y=y)
-data.txn_mask = txn_mask
+pyg_data = Data(x=x, edge_index=edge_index, y=y)
 
-print(f"  Edge index shape         : {edge_index.shape}")
-print(f"  Data object              : {data}")
+# ------------------------------------------------
+# STEP 7 — TRAIN / VAL / TEST SPLIT  (70 / 15 / 15)
+# ------------------------------------------------
+print("\nSTEP 7 — Train / Val / Test Split  (70 / 15 / 15)")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 4. TRAIN / TEST SPLIT  (on transaction nodes only)
-# ─────────────────────────────────────────────────────────────────────────────
-print("\n" + "=" * 60)
-print("STEP 3 — Train / Test split")
-print("=" * 60)
-
-txn_idx_arr = np.array(txn_indices)
-txn_labels_arr = labels[txn_idx_arr]
-
-# Stratified split to preserve fraud class ratio
-train_idx, test_idx = train_test_split(
-    txn_idx_arr,
-    test_size=0.20,
-    stratify=txn_labels_arr,
-    random_state=SEED,
+# FIX 7: Proper 3-way split with masks
+# Old code had only train/test (no validation) and evaluated on test incorrectly
+train_idx, temp_idx = train_test_split(
+    txn_indices, test_size=0.30,
+    random_state=SEED, stratify=txn_labels
+)
+temp_labels = labels[temp_idx]
+val_idx, test_idx = train_test_split(
+    temp_idx, test_size=0.50,
+    random_state=SEED, stratify=temp_labels
 )
 
 train_mask = torch.zeros(num_nodes, dtype=torch.bool)
-test_mask = torch.zeros(num_nodes, dtype=torch.bool)
+val_mask   = torch.zeros(num_nodes, dtype=torch.bool)
+test_mask  = torch.zeros(num_nodes, dtype=torch.bool)
+
 train_mask[train_idx] = True
-test_mask[test_idx] = True
+val_mask[val_idx]     = True
+test_mask[test_idx]   = True
 
-data.train_mask = train_mask
-data.test_mask = test_mask
+pyg_data.train_mask = train_mask
+pyg_data.val_mask   = val_mask
+pyg_data.test_mask  = test_mask
 
-fraud_count = int((txn_labels_arr == 1).sum())
-legit_count = int((txn_labels_arr == 0).sum())
-print(f"  Train nodes : {train_mask.sum().item():,}")
-print(f"  Test  nodes : {test_mask.sum().item():,}")
-print(f"  Fraud txns  : {fraud_count:,}  ({100 * fraud_count / len(txn_labels_arr):.1f}%)")
-print(f"  Legit txns  : {legit_count:,}  ({100 * legit_count / len(txn_labels_arr):.1f}%)")
+print(f"Train : {train_mask.sum().item()}  |  "
+      f"Val : {val_mask.sum().item()}  |  "
+      f"Test : {test_mask.sum().item()}")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 5. MODEL DEFINITION — 2-Layer GCN
-# ─────────────────────────────────────────────────────────────────────────────
-print("\n" + "=" * 60)
-print("STEP 4 — Building 2-Layer GCN model")
-print("=" * 60)
+# ------------------------------------------------
+# STEP 8 — CLASS WEIGHTS
+# ------------------------------------------------
+# FIX 8: Without class weights the model over-predicts the majority class
+# pos_weight penalises missed frauds ~4.8x more than missed legit transactions
+# This directly fixes Precision=0.17, Recall=1.0 problem from before
+pos_weight = legit_count / fraud_count
+print(f"\nClass weight (fraud penalty) : {pos_weight:.2f}x")
+
+criterion = nn.CrossEntropyLoss(
+    weight=torch.tensor([1.0, pos_weight], dtype=torch.float)
+)
+
+# ------------------------------------------------
+# STEP 9 — GCN MODEL
+# ------------------------------------------------
+print("\nSTEP 9 — Building GCN Model")
 
 class FraudGCN(nn.Module):
-    """
-    Two-layer Graph Convolutional Network for node-level binary classification.
 
-    Architecture:
-        Input (MAX_DIM)
-          └─► GCNConv → BatchNorm → ReLU → Dropout
-                └─► GCNConv (embedding layer)  → BatchNorm → ReLU → Dropout
-                      └─► Linear → 2-class logits
-    """
-
-    def __init__(self, in_channels: int, hidden_channels: int, out_channels: int, dropout: float = 0.4):
+    def __init__(self, in_channels: int):
         super().__init__()
-        self.conv1 = GCNConv(in_channels, hidden_channels)
-        self.bn1   = nn.BatchNorm1d(hidden_channels)
-        self.conv2 = GCNConv(hidden_channels, hidden_channels)
-        self.bn2   = nn.BatchNorm1d(hidden_channels)
-        self.lin   = nn.Linear(hidden_channels, out_channels)
-        self.dropout = dropout
+        # FIX 9: in_channels = 53 (TXN_FEAT_DIM) instead of hardcoded 5
+        self.conv1   = GCNConv(in_channels, 128)
+        self.conv2   = GCNConv(128, 64)
+        self.dropout = nn.Dropout(p=0.3)
+        self.lin     = nn.Linear(64, 2)
 
     def forward(self, x, edge_index):
-        # ── Layer 1 ──────────────────────────────────────────────────────────
-        x = self.conv1(x, edge_index)
-        x = self.bn1(x)
-        x = F.relu(x)
-        x = F.dropout(x, p=self.dropout, training=self.training)
-        # ── Layer 2 (produces node embeddings) ───────────────────────────────
-        x = self.conv2(x, edge_index)
-        x = self.bn2(x)
-        x = F.relu(x)
-        x = F.dropout(x, p=self.dropout, training=self.training)
-        # ── Classifier head ──────────────────────────────────────────────────
-        out = self.lin(x)
-        return out, x   # (logits, embeddings)
+        x          = F.relu(self.conv1(x, edge_index))
+        x          = self.dropout(x)
+        embeddings = F.relu(self.conv2(x, edge_index))
+        out        = self.lin(embeddings)
+        return out, embeddings
 
-IN_CHANNELS     = MAX_DIM
-HIDDEN_CHANNELS = 64
-OUT_CHANNELS    = 2   # binary: legit=0, fraud=1
-DROPOUT         = 0.4
 
-model = FraudGCN(IN_CHANNELS, HIDDEN_CHANNELS, OUT_CHANNELS, DROPOUT)
-print(f"  {model}")
-print(f"  Trainable params: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
+model     = FraudGCN(in_channels=TXN_FEAT_DIM)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 6. CLASS WEIGHTS  (to handle imbalance)
-# ─────────────────────────────────────────────────────────────────────────────
-total = legit_count + fraud_count
-w_legit = total / (2.0 * legit_count) if legit_count > 0 else 1.0
-w_fraud = total / (2.0 * fraud_count) if fraud_count > 0 else 1.0
-class_weights = torch.tensor([w_legit, w_fraud], dtype=torch.float)
-print(f"\n  Class weights  → legit: {w_legit:.3f}  fraud: {w_fraud:.3f}")
+print(f"Model parameters : {sum(p.numel() for p in model.parameters()):,}")
 
-criterion = nn.CrossEntropyLoss(weight=class_weights)
+# ------------------------------------------------
+# STEP 10 — TRAINING WITH EARLY STOPPING
+# ------------------------------------------------
+print("\nSTEP 10 — Training GCN (up to 100 epochs with early stopping)")
+print("-" * 60)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 7. TRAINING LOOP
-# ─────────────────────────────────────────────────────────────────────────────
-print("\n" + "=" * 60)
-print("STEP 5 — Training GCN")
-print("=" * 60)
+best_val_f1    = 0.0
+best_epoch     = 0
+best_state     = None
+patience       = 15
+patience_count = 0
 
-EPOCHS     = 50
-LR         = 1e-3
-WEIGHT_DECAY = 5e-4
-LOG_EVERY  = 20
+for epoch in range(1, 101):
 
-optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.5)
-
-x_t       = data.x
-ei_t      = data.edge_index
-y_t       = data.y
-tr_mask   = data.train_mask
-
-best_loss = float("inf")
-best_state = None
-
-print(f"  Epochs: {EPOCHS} | LR: {LR} | Hidden: {HIDDEN_CHANNELS} | Dropout: {DROPOUT}")
-print()
-
-for epoch in range(1, EPOCHS + 1):
+    # Train
     model.train()
     optimizer.zero_grad()
+    logits, _ = model(pyg_data.x, pyg_data.edge_index)
 
-    logits, _ = model(x_t, ei_t)
-
-    # Loss only on training transaction nodes
-    loss = criterion(logits[tr_mask], y_t[tr_mask])
+    # FIX 10: Loss on train_mask nodes only
+    loss = criterion(logits[pyg_data.train_mask],
+                     pyg_data.y[pyg_data.train_mask])
     loss.backward()
     optimizer.step()
-    scheduler.step()
 
-    # ── Accuracy on train set (for logging) ──────────────────────────────────
-    if epoch % LOG_EVERY == 0 or epoch == 1:
+    # Validate every 5 epochs
+    if epoch % 5 == 0 or epoch == 1:
+
         model.eval()
         with torch.no_grad():
-            logits_eval, _ = model(x_t, ei_t)
-            preds_train = logits_eval[tr_mask].argmax(dim=1)
-            acc_train = (preds_train == y_t[tr_mask]).float().mean().item()
-        print(f"  Epoch {epoch:>4d}/{EPOCHS}  |  Loss: {loss.item():.4f}  |  Train Acc: {acc_train:.4f}")
+            val_logits, _ = model(pyg_data.x, pyg_data.edge_index)
 
-    if loss.item() < best_loss:
-        best_loss = loss.item()
-        best_state = {k: v.clone() for k, v in model.state_dict().items()}
+        val_preds = val_logits[pyg_data.val_mask].argmax(dim=1).numpy()
+        val_true  = pyg_data.y[pyg_data.val_mask].numpy()
 
-# Restore best weights
+        val_p  = precision_score(val_true, val_preds, zero_division=0)
+        val_r  = recall_score(val_true, val_preds, zero_division=0)
+        val_f1 = f1_score(val_true, val_preds, zero_division=0)
+
+        print(f"Epoch {epoch:3d} | Loss {loss.item():.4f} | "
+              f"Val Precision {val_p:.3f} | Val Recall {val_r:.3f} | "
+              f"Val F1 {val_f1:.3f}")
+
+        # Save best model
+        if val_f1 > best_val_f1:
+            best_val_f1    = val_f1
+            best_epoch     = epoch
+            patience_count = 0
+            best_state     = {k: v.clone() for k, v in model.state_dict().items()}
+        else:
+            patience_count += 1
+            if patience_count >= patience:
+                print(f"\nEarly stopping triggered at epoch {epoch}")
+                print(f"Best val F1 = {best_val_f1:.3f} at epoch {best_epoch}")
+                break
+
+# Restore best weights before evaluation
 model.load_state_dict(best_state)
-print(f"\n  Best training loss: {best_loss:.4f} — best weights restored.")
+print(f"\nBest model restored from epoch {best_epoch}  (val F1 = {best_val_f1:.3f})")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 8. EVALUATION  — Precision · Recall · F1
-# ─────────────────────────────────────────────────────────────────────────────
-print("\n" + "=" * 60)
-print("STEP 6 — Evaluation on Test Set")
-print("=" * 60)
+# ------------------------------------------------
+# STEP 11 — EVALUATION ON TEST SET
+# ------------------------------------------------
+print("\nSTEP 11 — Evaluation on held-out Test Set")
+print("-" * 60)
 
 model.eval()
 with torch.no_grad():
-    logits_all, embeddings_all = model(x_t, ei_t)
+    logits, embeddings = model(pyg_data.x, pyg_data.edge_index)
 
-te_mask = data.test_mask
-preds_test = logits_all[te_mask].argmax(dim=1).numpy()
-true_test  = y_t[te_mask].numpy()
+# FIX 11: Evaluate ONLY on test_mask nodes — never on train or val
+preds = logits[pyg_data.test_mask].argmax(dim=1).numpy()
+true  = pyg_data.y[pyg_data.test_mask].numpy()
 
-precision = precision_score(true_test, preds_test, zero_division=0)
-recall    = recall_score(true_test, preds_test, zero_division=0)
-f1        = f1_score(true_test, preds_test, zero_division=0)
+precision = precision_score(true, preds, zero_division=0)
+recall    = recall_score(true, preds, zero_division=0)
+f1        = f1_score(true, preds, zero_division=0)
 
-print(f"\n  Precision : {precision:.4f}")
-print(f"  Recall    : {recall:.4f}")
-print(f"  F1-Score  : {f1:.4f}")
+print(f"\nPrecision : {precision:.4f}")
+print(f"Recall    : {recall:.4f}")
+print(f"F1 Score  : {f1:.4f}")
+print("\nFull Classification Report:")
+print(classification_report(true, preds,
+                             target_names=["Legit", "Fraud"],
+                             zero_division=0))
 
-# Check unique labels to avoid ValueError in classification_report
-unique_labels = np.unique(true_test)
-print(f"  Unique labels in test set: {unique_labels}")
+# ------------------------------------------------
+# STEP 12 — SAVE EMBEDDINGS
+# ------------------------------------------------
+print("\nSTEP 12 — Saving Embeddings")
 
-print("\n  Detailed classification report:")
-try:
-    print(classification_report(true_test, preds_test,
-                                 labels=[0, 1],
-                                 target_names=["Legit (0)", "Fraud (1)"],
-                                 zero_division=0))
-except ValueError as e:
-    print(f"  Error generating report: {e}")
-    print("  Falling back to simple report...")
-    print(classification_report(true_test, preds_test, zero_division=0))
+embeddings_np = embeddings.detach().numpy()
+labels_np     = y.numpy()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 9. SAVE NODE EMBEDDINGS
-# ─────────────────────────────────────────────────────────────────────────────
-print("\n" + "=" * 60)
-print("STEP 7 — Saving Node Embeddings")
-print("=" * 60)
-
-# Save embeddings for ALL nodes (shape: [num_nodes, HIDDEN_CHANNELS])
-embeddings_np = embeddings_all.detach().numpy()
-labels_np     = y_t.numpy()
-
-np.save(EMBEDDINGS_PATH, embeddings_np)
+# All-node embeddings
+np.save(EMBEDDINGS_PATH,       embeddings_np)
 np.save(EMBEDDING_LABELS_PATH, labels_np)
 
-print(f"  Embeddings shape : {embeddings_np.shape}")
-print(f"  Saved to         : {EMBEDDINGS_PATH}")
-print(f"  Labels saved to  : {EMBEDDING_LABELS_PATH}")
+# Transaction-only embeddings for anomaly detector
+txn_embeddings = embeddings_np[txn_indices]
+txn_labels_arr = labels_np[txn_indices]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 10. TRANSACTION-NODE EMBEDDINGS (for downstream use)
-# ─────────────────────────────────────────────────────────────────────────────
-txn_embeddings = embeddings_np[txn_idx_arr]
-txn_emb_path   = os.path.join(EMBEDDINGS_DIR, "txn_embeddings.npy")
-np.save(txn_emb_path, txn_embeddings)
-print(f"  Transaction embeddings: {txn_embeddings.shape}  → {txn_emb_path}")
+np.save(TXN_EMBEDDINGS_PATH, txn_embeddings)
+np.save(TXN_LABELS_PATH,     txn_labels_arr)
+
+print(f"All-node embeddings  : {embeddings_np.shape}  → {EMBEDDINGS_PATH}")
+print(f"Txn-only embeddings  : {txn_embeddings.shape}  → {TXN_EMBEDDINGS_PATH}")
+print(f"Txn labels           : {txn_labels_arr.shape}  → {TXN_LABELS_PATH}")
 
 print("\n" + "=" * 60)
-print("  Pipeline complete!")
+print("Pipeline Complete.")
 print("=" * 60)

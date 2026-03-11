@@ -1,113 +1,186 @@
+import os
+import pickle
 import pandas as pd
 import networkx as nx
 from pyvis.network import Network
-import pickle
-import os
 
-# =====================================
-# PATH CONFIGURATION (PROJECT SAFE)
-# =====================================
+# ─────────────────────────────────────────────────────────────────────────────
+# PATH CONFIGURATION
+# ─────────────────────────────────────────────────────────────────────────────
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-BASE_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..")
-)
-
-DATA_PATH = os.path.join(BASE_DIR, "data", "raw", "fraud_dataset.csv")
+# FIX: Point to the CLEANED dataset (not the raw one)
+DATA_PATH  = os.path.join(BASE_DIR, "data", "raw", "fraud_dataset_cleaned.csv")
 GRAPH_PATH = os.path.join(BASE_DIR, "data", "graph", "transaction_graph.pkl")
-HTML_PATH = os.path.join(BASE_DIR, "visualizations", "graph_visualization.html")
+HTML_PATH  = os.path.join(BASE_DIR, "visualizations", "graph_visualization.html")
 
-# Create folders if missing
 os.makedirs(os.path.join(BASE_DIR, "data", "graph"), exist_ok=True)
 os.makedirs(os.path.join(BASE_DIR, "visualizations"), exist_ok=True)
 
-# =====================================
-# LOAD DATASET
-# =====================================
+# ─────────────────────────────────────────────────────────────────────────────
+# LOAD CLEANED DATASET
+# ─────────────────────────────────────────────────────────────────────────────
+df = pd.read_csv(r"C:\Users\Administrator\OneDrive\Desktop\fraud-detection-gnn\data\processed\fraud_dataset_cleaned.csv")
 
-df = pd.read_csv(DATA_PATH)
+print("Dataset loaded")
+print("Shape        :", df.shape)
+print("Fraud rate   :", f"{df['is_fraud'].mean():.2%}")
 
-print("Dataset Loaded")
-print("Shape:", df.shape)
-print(df.head())
+# All 53 transaction-level feature columns (everything except IDs and label)
+FEATURE_COLS = [c for c in df.columns
+                if c not in ["transaction_id", "user_id", "merchant_id",
+                             "device_id", "is_fraud"]]
 
-# =====================================
-# CREATE GRAPH
-# =====================================
+print("Feature cols :", len(FEATURE_COLS))
 
+# ─────────────────────────────────────────────────────────────────────────────
+# BUILD GRAPH
+# ─────────────────────────────────────────────────────────────────────────────
 G = nx.Graph()
 
+# ── Pre-compute user-level aggregates ────────────────────────────────────────
+user_stats = (
+    df.groupby("user_id")
+    .agg(
+        total_txn        = ("transaction_id", "count"),
+        avg_amount       = ("amount",         "mean"),
+        # fraud_ratio is stored on the user node for message-passing enrichment
+        # ONLY. is_fraud itself is never placed into the feature matrix X.
+        fraud_ratio      = ("is_fraud",       "mean"),
+        unique_merchants = ("merchant_id",    "nunique"),
+        unique_devices   = ("device_id",      "nunique"),
+    )
+    .to_dict("index")
+)
+
+# ── Pre-compute merchant-level aggregates ────────────────────────────────────
+merchant_stats = (
+    df.groupby("merchant_id")
+    .agg(
+        total_txn    = ("transaction_id", "count"),
+        fraud_ratio  = ("is_fraud",       "mean"),
+        unique_users = ("user_id",        "nunique"),
+    )
+    .to_dict("index")
+)
+
+# ── Pre-compute device-level aggregates ──────────────────────────────────────
+device_stats = (
+    df.groupby("device_id")
+    .agg(
+        total_txn    = ("transaction_id", "count"),
+        unique_users = ("user_id",        "nunique"),
+    )
+    .to_dict("index")
+)
+
+# ── Add all nodes and edges ───────────────────────────────────────────────────
 for _, row in df.iterrows():
 
-    txn = f"txn_{row['transaction_id']}"
-    user = f"user_{row['user_id']}"
-    merchant = f"merchant_{row['merchant_id']}"
-    device = f"device_{row['device_id']}"
+    txn_node      = f"txn_{row['transaction_id']}"
+    user_node     = f"user_{row['user_id']}"
+    merchant_node = f"merchant_{row['merchant_id']}"
+    device_node   = f"device_{row['device_id']}"
 
-    # Add nodes
-    G.add_node(txn, type="transaction")
-    G.add_node(user, type="user")
-    G.add_node(merchant, type="merchant")
-    G.add_node(device, type="device")
+    # ── Transaction node ──────────────────────────────────────────────────────
+    # Store all 53 cleaned features as node attributes.
+    # is_fraud is stored separately as 'label' — used as y during training,
+    # NOT placed into the feature matrix X.
+    txn_attrs = {feat: float(row[feat]) for feat in FEATURE_COLS}
+    txn_attrs["type"]  = "transaction"
+    txn_attrs["label"] = int(row["is_fraud"])   # training target only
+    G.add_node(txn_node, **txn_attrs)
 
-    # Add edges
-    G.add_edge(user, txn)
-    G.add_edge(txn, merchant)
-    G.add_edge(txn, device)
+    # ── User node ─────────────────────────────────────────────────────────────
+    uid    = row["user_id"]
+    ustats = user_stats.get(uid, {})
+    G.add_node(user_node,
+               type             = "user",
+               total_txn        = float(ustats.get("total_txn",        0)),
+               avg_amount       = float(ustats.get("avg_amount",       0)),
+               fraud_ratio      = float(ustats.get("fraud_ratio",      0)),
+               unique_merchants = float(ustats.get("unique_merchants", 0)),
+               unique_devices   = float(ustats.get("unique_devices",   0)))
 
-print("\nGraph Created Successfully")
-print("Total Nodes:", G.number_of_nodes())
-print("Total Edges:", G.number_of_edges())
+    # ── Merchant node ─────────────────────────────────────────────────────────
+    mid    = row["merchant_id"]
+    mstats = merchant_stats.get(mid, {})
+    G.add_node(merchant_node,
+               type         = "merchant",
+               total_txn    = float(mstats.get("total_txn",    0)),
+               fraud_ratio  = float(mstats.get("fraud_ratio",  0)),
+               unique_users = float(mstats.get("unique_users", 0)))
 
-# =====================================
-# SAVE GRAPH (.pkl)
-# =====================================
+    # ── Device node ───────────────────────────────────────────────────────────
+    did    = row["device_id"]
+    dstats = device_stats.get(did, {})
+    G.add_node(device_node,
+               type         = "device",
+               total_txn    = float(dstats.get("total_txn",    0)),
+               unique_users = float(dstats.get("unique_users", 0)))
 
+    # ── Edges (structural relationships) ─────────────────────────────────────
+    G.add_edge(user_node, txn_node)        # user initiated transaction
+    G.add_edge(txn_node, merchant_node)    # transaction at merchant
+    G.add_edge(txn_node, device_node)      # transaction via device
+
+# ── FIX: Add user→device edges (shared-device fraud ring signal) ─────────────
+# Two users who share a device are likely linked — key structural fraud signal
+user_device_map = df.groupby("user_id")["device_id"].unique()
+for uid, devices in user_device_map.items():
+    user_node = f"user_{uid}"
+    for did in devices:
+        device_node = f"device_{did}"
+        if G.has_node(user_node) and G.has_node(device_node):
+            G.add_edge(user_node, device_node)
+
+print("\nGraph built successfully")
+print("Total nodes :", G.number_of_nodes())
+print("Total edges :", G.number_of_edges())
+
+# Node type breakdown
+type_counts = {}
+for _, d in G.nodes(data=True):
+    t = d.get("type", "unknown")
+    type_counts[t] = type_counts.get(t, 0) + 1
+for t, c in sorted(type_counts.items()):
+    print(f"  {t:12s}: {c}")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SAVE GRAPH
+# ─────────────────────────────────────────────────────────────────────────────
 with open(GRAPH_PATH, "wb") as f:
     pickle.dump(G, f)
 
-print("Graph Saved at:", GRAPH_PATH)
+print(f"\nGraph saved → {GRAPH_PATH}")
 
-# =====================================
-# INTERACTIVE VISUALIZATION
-# =====================================
-
-# Full graph is huge → sample for visualization
+# ─────────────────────────────────────────────────────────────────────────────
+# INTERACTIVE VISUALIZATION (sampled — full graph is too large to render)
+# ─────────────────────────────────────────────────────────────────────────────
 sample_nodes = list(G.nodes())[:300]
 H = G.subgraph(sample_nodes)
 
-net = Network(
-    height="750px",
-    width="100%",
-    bgcolor="#111111",
-    font_color="white"
-)
+net = Network(height="750px", width="100%", bgcolor="#111111", font_color="white")
 
-# Add nodes with colors
-for node, data in H.nodes(data=True):
+COLOR_MAP = {
+    "user":        "#3498db",   # blue
+    "merchant":    "#e74c3c",   # red
+    "device":      "#2ecc71",   # green
+    "transaction": "#f39c12",   # orange
+}
 
-    node_type = data["type"]
-
-    if node_type == "user":
-        color = "#3498db"   # blue
-    elif node_type == "merchant":
-        color = "#e74c3c"   # red
-    elif node_type == "device":
-        color = "#2ecc71"   # green
+for node, d in H.nodes(data=True):
+    node_type = d.get("type", "transaction")
+    # Highlight fraud transactions in bright red
+    if node_type == "transaction" and d.get("label", 0) == 1:
+        color = "#FF0000"
     else:
-        color = "#f39c12"   # orange (transaction)
+        color = COLOR_MAP.get(node_type, "#f39c12")
+    net.add_node(node, label=node, color=color, size=12)
 
-    net.add_node(
-        node,
-        label=node,
-        color=color,
-        size=12
-    )
-
-# Add edges
 for source, target in H.edges():
     net.add_edge(source, target)
 
-# Physics settings
 net.set_options("""
 var options = {
   "physics": {
@@ -120,7 +193,5 @@ var options = {
 }
 """)
 
-# Save visualization
 net.write_html(HTML_PATH)
-
-print("Interactive graph created at:", HTML_PATH)
+print(f"Visualization saved → {HTML_PATH}")
