@@ -326,6 +326,68 @@ print(classification_report(true, preds,
                              target_names=["Legit", "Fraud"],
                              zero_division=0))
 
+
+# ------------------------------------------------
+# STEP 13 — LOG CREATION (SAVE RESULTS)
+# ------------------------------------------------
+print("\nSTEP 13 — Creating Logs")
+
+import pandas as pd
+import os
+
+# Convert predictions and true labels
+preds_list = preds.tolist()
+true_list  = true.tolist()
+
+# Create DataFrame
+log_df = pd.DataFrame({
+    "predicted_label": preds_list,
+    "actual_label": true_list
+})
+
+# ------------------------------------------------
+# ADD RESULT COLUMN (TP, FP, FN, TN)
+# ------------------------------------------------
+def get_result(row):
+    if row["predicted_label"] == 1 and row["actual_label"] == 1:
+        return "TP"
+    elif row["predicted_label"] == 1 and row["actual_label"] == 0:
+        return "FP"
+    elif row["predicted_label"] == 0 and row["actual_label"] == 1:
+        return "FN"
+    else:
+        return "TN"
+
+log_df["result"] = log_df.apply(get_result, axis=1)
+
+# ------------------------------------------------
+# ADD CONFIDENCE SCORE (OPTIONAL BUT IMPORTANT)
+# ------------------------------------------------
+confidence = logits[pyg_data.test_mask].max(dim=1).values.numpy()
+log_df["confidence"] = confidence
+
+# ------------------------------------------------
+# ADD SUMMARY COUNTS
+# ------------------------------------------------
+tp = ((log_df["result"] == "TP")).sum()
+fp = ((log_df["result"] == "FP")).sum()
+fn = ((log_df["result"] == "FN")).sum()
+tn = ((log_df["result"] == "TN")).sum()
+
+print("\nConfusion Matrix Counts:")
+print(f"TP: {tp}, FP: {fp}, FN: {fn}, TN: {tn}")
+
+# ------------------------------------------------
+# SAVE FILE
+# ------------------------------------------------
+LOG_DIR = os.path.join(BASE_DIR, "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+
+LOG_PATH = os.path.join(LOG_DIR, "fraud_detection_logs.xlsx")
+
+log_df.to_csv("fraud_detection_logs.csv", index=False)
+
+print(f"\nLogs saved at: {LOG_PATH}")
 # ------------------------------------------------
 # STEP 12 — SAVE EMBEDDINGS
 # ------------------------------------------------
