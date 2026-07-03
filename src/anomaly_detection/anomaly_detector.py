@@ -26,7 +26,7 @@ df = df.iloc[:current_count].reset_index(drop=True)
 # Here we load the labels and ensure they match the embeddings perfectly.
 y_true = np.load(LBL_PATH)[:current_count]
 
-print(f"🔄 Adaptive Mode: Processing all {current_count} transactions.")
+print(f"Adaptive Mode: Processing all {current_count} transactions.")
 
 # 3. TRAIN & PREDICT
 # We use a slightly higher contamination to account for new incoming fraud patterns
@@ -50,10 +50,10 @@ risk_scores = 100 * (1 - (decision_scores - min_ds) / (max_ds - min_ds))
 y_pred_binary = np.where(y_pred_raw == -1, 1, 0)
 
 print("\n" + "="*45)
-print("🚀 GNN-BASED FRAUD DETECTION (LIVE SYNC)")
+print("GNN-BASED FRAUD DETECTION (LIVE SYNC)")
 print("="*45)
-print(f"📊 Accuracy: {np.mean(y_pred_binary == y_true):.2%}")
-print(f"📝 Total Transactions Processed: {len(df)}")
+print(f"Accuracy: {np.mean(y_pred_binary == y_true):.2%}")
+print(f"Total Transactions Processed: {len(df)}")
 print("\nDetailed Classification Report:")
 print(classification_report(y_true, y_pred_binary, target_names=['Legitimate', 'Fraud']))
 
@@ -69,5 +69,5 @@ os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
 results_df.to_csv(OUTPUT_PATH, index=False)
 
 print("-" * 45)
-print(f"✅ Live Results saved to: {OUTPUT_PATH}")
+print(f"Live Results saved to: {OUTPUT_PATH}")
 print("="*45)

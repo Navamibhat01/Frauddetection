@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UPI Shield | Unsupervised GNN Engine</title>
+    <!-- Google Fonts for premium typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="glow-bg"></div>
+    
+    <header class="app-header">
+        <div class="header-logo">
+            <span class="logo-icon">🛡️</span>
+            <div>
+                <h1>AeroPay GNN Shield</h1>
+                <p>Unsupervised Latent Space Anomaly Detection</p>
+            </div>
+        </div>
+        <div class="engine-status">
+            <span class="status-indicator pulsing"></span>
+            <span class="status-text">Active GNN Inference Engine</span>
+        </div>
+    </header>
+
+    <main class="main-container">
+        <!-- LEFT: UPI Mobile Wallet Simulator -->
+        <section class="wallet-column">
+            <div class="phone-simulator">
+                <div class="phone-notch"></div>
+                <div class="phone-screen">
+                    <!-- Top Status Bar -->
+                    <div class="phone-status-bar">
+                        <span class="time">19:40</span>
+                        <div class="status-icons">
+                            <span>📶</span>
+                            <span>🔋</span>
+                        </div>
+                    </div>
+
+                    <!-- Screen Content Container -->
+                    <div class="screen-content active" id="wallet-screen">
+                        <!-- AeroPay Logo -->
+                        <div class="wallet-header">
+                            <span class="wallet-brand">AeroPay</span>
+                            <span class="wallet-badge">UPI 2.0</span>
+                        </div>
+
+                        <!-- Card/Balance display -->
+                        <div class="balance-card">
+                            <div class="card-bg-gradient"></div>
+                            <div class="card-details">
+                                <span class="card-label">Primary Account</span>
+                                <span class="card-num">•••• •••• •••• 9012</span>
+                                <h3 class="balance-amount">₹42,500.50</h3>
+                            </div>
+                        </div>
+
+                        <!-- UPI Transaction Form -->
+                        <form id="upi-payment-form" class="upi-form">
+                            <div class="input-group">
+                                <label for="upi-id">Payee UPI ID</label>
+                                <div class="input-wrapper">
+                                    <span class="input-icon">👤</span>
+                                    <input type="text" id="upi-id" placeholder="name@bank or merchant_id" required value="merchant_navami@axis">
+                                </div>
+                            </div>
+
+                            <div class="input-group">
+                                <label for="txn-amount">Amount (₹)</label>
+                                <div class="input-wrapper">
+                                    <span class="input-icon">₹</span>
+                                    <input type="number" id="txn-amount" min="1" max="1000000" placeholder="0.00" required value="85000">
+                                </div>
+                                <div class="quick-amounts">
+                                    <button type="button" class="btn-quick" data-amount="500">₹500</button>
+                                    <button type="button" class="btn-quick" data-amount="5000">₹5,000</button>
+                                    <button type="button" class="btn-quick" data-amount="85000">₹85,000</button>
+                                </div>
+                            </div>
+
+                            <div class="threat-sim-box">
+                                <span class="sim-label">Simulate Device Context:</span>
+                                <div class="checkbox-group">
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="sim-screen-share">
+                                        <span class="slider"></span>
+                                        <span class="label-text">Screen Sharing Active</span>
+                                    </label>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="sim-root-status">
+                                        <span class="slider"></span>
+                                        <span class="label-text">Rooted/Jailbroken Device</span>
+                                    </label>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="sim-vpn">
+                                        <span class="slider"></span>
+                                        <span class="label-text">Unusual VPN Node</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <button type="submit" class="btn-pay" id="pay-btn">
+                                <span class="btn-text">PAY SECURELY</span>
+                                <span class="btn-glow"></span>
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- Screen: Sniffing / Scanning State -->
+                    <div class="screen-content" id="processing-screen">
+                        <div class="processing-loader">
+                            <div class="spinner-outer"></div>
+                            <div class="spinner-inner"></div>
+                            <span class="spinner-icon">🛡️</span>
+                        </div>
+                        <h3>Analyzing Transaction</h3>
+                        <p class="process-step-text">Initiating Sniffer Protocols...</p>
+                        
+                        <div class="mobile-terminal-preview">
+                            <div class="terminal-header">
+                                <span class="term-dot red"></span>
+                                <span class="term-dot yellow"></span>
+                                <span class="term-dot green"></span>
+                                <span class="term-title">sniffer_daemon.log</span>
+                            </div>
+                            <div class="terminal-body" id="mobile-log-stream">
+                                <!-- Logs will stream here -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Screen: Verdict View -->
+                    <div class="screen-content" id="verdict-screen">
+                        <div class="verdict-card">
+                            <div class="verdict-icon-container" id="verdict-icon-bg">
+                                <span class="verdict-large-icon" id="verdict-icon">✓</span>
+                            </div>
+                            <h2 class="verdict-title" id="verdict-title">Transaction Authorized</h2>
+                            <p class="verdict-desc" id="verdict-desc">Success: Embedding verified within Global Safe Cluster.</p>
+                            
+                            <div class="verdict-meta">
+                                <div class="meta-row">
+                                    <span>Txn ID:</span>
+                                    <strong id="verdict-txn-id">TXN-493A27DF</strong>
+                                </div>
+                                <div class="meta-row">
+                                    <span>GNN Risk:</span>
+                                    <strong id="verdict-risk-pct">12.4%</strong>
+                                </div>
+                            </div>
+
+                            <button class="btn-reset" id="reset-btn">Done</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- RIGHT: GNN Adaptive Shield Monitor -->
+        <section class="dashboard-column">
+            <!-- Glass Card: Sniffer Diagnostics -->
+            <article class="glass-card" id="sniffer-card">
+                <div class="card-header">
+                    <h3><span class="card-icon">🔬</span>The Invisible Sniffer</h3>
+                    <span class="badge" id="features-counter">0 / 43 Features</span>
+                </div>
+                <div class="sniffer-grid-container">
+                    <p class="section-desc">On "Pay", the sniffer implicitly captures 43 client-side context nodes (Geospatial, Temporal, Device Profile, Biometric Speed) without rule gating.</p>
+                    <div class="sniffer-log-wrapper">
+                        <div class="terminal-body" id="main-log-stream">
+                            <div class="empty-terminal-msg">Waiting for transaction initiation...</div>
+                        </div>
+                    </div>
+                </div>
+            </article>
+
+            <!-- Glass Card: Node Mapping & Embedding Projection -->
+            <article class="glass-card disabled" id="mapping-card">
+                <div class="card-header">
+                    <h3><span class="card-icon">🧠</span>Latent Space Projection & GraphSAGE Aggregator</h3>
+                    <div class="card-badge" id="aggregator-status">Idle</div>
+                </div>
+                <div class="mapping-grid">
+                    <!-- Graph Network Animation -->
+                    <div class="graph-animation-box">
+                        <span class="sub-label">Message Passing & Edge Alignment</span>
+                        <div class="canvas-wrapper">
+                            <canvas id="network-canvas"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Latent Space Cloud -->
+                    <div class="latent-space-box">
+                        <span class="sub-label">Global Safe Cluster Projection</span>
+                        <div class="canvas-wrapper">
+                            <canvas id="latent-space-canvas"></canvas>
+                            <div class="latent-distance-overlay" id="distance-overlay">
+                                <span class="dist-val">--</span>
+                                <span class="dist-label">Mahalanobis Distance</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </article>
+
+            <!-- Glass Card: Unsupervised Explainable AI Evidence -->
+            <article class="glass-card disabled" id="xai-card">
+                <div class="card-header">
+                    <h3><span class="card-icon">👁️</span>Relational Feature Importance (Unsupervised XAI)</h3>
+                    <span class="badge badge-accent">No Rules Enforcement</span>
+                </div>
+                <div class="xai-content">
+                    <p class="section-desc">Traditional AI relies on rule-based flags (e.g. `amount > 50000`). GNN Shield evaluates the anomaly variance of high-dimensional relational clusters.</p>
+                    
+                    <div class="xai-metrics-container">
+                        <!-- Metric 1: Node Outlier Distance -->
+                        <div class="xai-metric-item" id="xai-node-outlier">
+                            <div class="metric-top">
+                                <span class="metric-label">Node Outlier Deviation</span>
+                                <span class="metric-status success" id="xai-outlier-badge">Normal</span>
+                            </div>
+                            <p class="metric-text" id="xai-outlier-text">Waiting for analysis...</p>
+                        </div>
+
+                        <!-- Metric 2: Edge Reconstruction Loss -->
+                        <div class="xai-metric-item" id="xai-edge-loss">
+                            <div class="metric-top">
+                                <span class="metric-label">Edge Reconstruction Probability</span>
+                                <span class="metric-status success" id="xai-edge-badge">Normal</span>
+                            </div>
+                            <p class="metric-text" id="xai-edge-text">Waiting for analysis...</p>
+                        </div>
+
+                        <!-- Metric 3: Latent Space Deviation -->
+                        <div class="xai-metric-item" id="xai-space-dev">
+                            <div class="metric-top">
+                                <span class="metric-label">Latent Space Feature Variance</span>
+                                <span class="metric-status success" id="xai-variance-badge">Normal</span>
+                            </div>
+                            <p class="metric-text" id="xai-variance-text">Waiting for analysis...</p>
+                        </div>
+                    </div>
+                </div>
+            </article>
+        </main>
+
+        <footer class="app-footer">
+            <p>© 2026 AeroPay Systems Inc. Graph-Based Intrusion Shield Engine (Unsupervised Latent Anomaly Mode).</p>
+        </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>
