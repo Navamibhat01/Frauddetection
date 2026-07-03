@@ -178,14 +178,3 @@ Model evaluation metrics stored in:
 - Confusion matrices
 - F1 scores
 
-## Contributing
-
-1. Create a feature branch: `git checkout -b feature/your-feature`
-2. Make your changes and commit: `git commit -am 'Add feature'`
-3. Push to the branch: `git push origin feature/your-feature`
-4. Submit a pull request
-
-
----
-
-For more information, check the logs in `logs/` directory and review configuration in the respective module files.
