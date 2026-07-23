@@ -41,4 +41,4 @@ for users in device_groups:
 with open(GRAPH_PATH, "wb") as f:
     pickle.dump(G, f)
 
-print(f"✅ Success: Graph saved to {GRAPH_PATH}")
+print(f"[SUCCESS] Success: Graph saved to {GRAPH_PATH}")

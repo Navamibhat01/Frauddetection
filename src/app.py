@@ -1,10 +1,21 @@
 import streamlit as st
 import os
+import sys
 import numpy as np
 import pandas as pd
 import uuid
 import re
 from datetime import datetime
+import matplotlib.pyplot as plt
+import networkx as nx
+import matplotlib
+
+# Force non-interactive backend for matplotlib
+matplotlib.use('Agg')
+
+# Add GNN folder to path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from graph.explain_gnn import explain_transaction
 
 # --- 1. FORCE SYSTEM REFRESH & CONFIG ---
 st.set_page_config(page_title="UPI GNN Shield", page_icon="🛡️", layout="wide")
@@ -122,6 +133,16 @@ def inject_custom_css():
             padding: 20px;
             border-radius: 12px;
             box-shadow: 0 10px 30px rgba(0, 255, 128, 0.1);
+            color: #e2e8f0;
+        }
+        .result-card-counterfactual {
+            background: rgba(0, 242, 254, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(0, 242, 254, 0.3);
+            border-left: 4px solid #00f2fe;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 242, 254, 0.1);
             color: #e2e8f0;
         }
 
@@ -247,25 +268,6 @@ with tab1:
                         </div>
                         """, unsafe_allow_html=True)
 
-                # --- EXPLAINABLE AI (BASED ON VECTOR MAPPING) ---
-                st.markdown("### 🧠 Explainable AI (Latent Space Analysis)")
-                if distance_to_safe_cluster <= safe_threshold:
-                    st.success(f"✨ **Transaction is Safe:** This transaction matches normal, expected behavior.\n\n*(Technical: Node mapped to safe region. Latent Space Distance: {distance_to_safe_cluster:.2f}σ, which is within the {safe_threshold}σ threshold).*")
-                else:
-                    st.error(f"🚩 **Anomaly Detected:** This transaction looks highly unusual and unsafe compared to normal activity!\n\n*(Technical: Latent Space Deviation. Node embedding fell outside the Global Safe Cluster with a distance of {distance_to_safe_cluster:.2f}σ).*")
-                    
-                    contributions = [
-                        ("Transaction Amount Variance", "The requested amount is significantly different from your typical transaction history.", z_amt**2),
-                        ("Transaction Velocity", "There are too many transactions happening in a very short amount of time.", z_vel**2),
-                        ("Security Context", "We detected a high-risk remote screen-sharing application running on your device.", z_scr**2)
-                    ]
-                    sorted_contrib = sorted(contributions, key=lambda x: x[2], reverse=True)
-                    
-                    st.markdown("#### Why was this flagged?")
-                    for tech_name, plain_english, value in sorted_contrib:
-                        if value > 1.0:
-                            st.markdown(f"- 🛑 **{plain_english}** <br> <span style='color:#94a3b8; font-size: 0.9em;'>*(Technical: Vector deviation driven by **{tech_name}** | Influence Score: {value:.2f})*</span>", unsafe_allow_html=True)
-
                 # --- PERSISTENCE: ADD TO DATASET ---
                 df_columns = pd.read_csv(DATA_PATH, nrows=0).columns
                 new_row = {
@@ -290,6 +292,175 @@ with tab1:
                 st.success("✅ Transaction successfully persisted to the Historical Ledger.")
                 st.cache_data.clear()
 
+                # --- EXPLAINABLE AI (NATURAL LANGUAGE & LATENT SPACE) ---
+                st.markdown("### 🧠 Explainable AI (Behavioral & Latent Space Analysis)")
+                
+                if distance_to_safe_cluster <= safe_threshold:
+                    st.success(f"✨ **Transaction is Safe:** This transaction matches normal, expected behavior.\n\n*(Technical: Node mapped to safe region. Latent Space Distance: {distance_to_safe_cluster:.2f}σ, which is within the {safe_threshold}σ threshold).*")
+                else:
+                    st.error(f"🚩 **Anomaly Detected:** This transaction looks highly unusual and unsafe compared to normal activity!\n\n*(Technical: Latent Space Deviation. Node embedding fell outside the Global Safe Cluster with a distance of {distance_to_safe_cluster:.2f}σ).*")
+
+                st.markdown("#### 🗣️ Natural Language Explanation")
+                if final_risk > 70:
+                    st.markdown(f"🚨 **Verdict Summary:** The transaction was **BLOCKED** because the system detected telemetry patterns that deviate significantly from your normal baseline by **{distance_to_safe_cluster:.2f}σ**.")
+                else:
+                    st.markdown(f"✨ **Verdict Summary:** The transaction was **ALLOWED** because its behavior is close to your normal baseline (overall deviation is **{distance_to_safe_cluster:.2f}σ**, which is within the safe limit of **2.5σ**).")
+                
+                # Bulleted parameters in clear English
+                st.markdown(f"""
+                - 💸 **Transaction Amount:** The requested amount of **₹{in_amt:,}** is **{abs(z_amt):.2f} standard deviations** {"higher" if z_amt > 0 else "lower"} than your average of **₹{avg_amt:,.0f}** (typical variation is ₹{std_amt:,.0f}).
+                - ⏳ **Transaction Frequency:** **{in_txns_60s} transactions** in the last 60 seconds is **{abs(z_vel):.2f} standard deviations** {"higher" if z_vel > 0 else "lower"} than the normal average rate of 1.5 transactions.
+                - 📱 **Security Context:** Remote screen-sharing is **{"ACTIVE (HIGH RISK)" if in_scr else "INACTIVE (SAFE)"}**. Active screen-sharing is a high-risk indicator often associated with remote access scams.
+                """)
+
+                # --- COUNTERFACTUAL RECOMMENDATIONS ---
+                st.markdown("#### 💡 Counterfactual Recommendations")
+                if final_risk > 70:
+                    recommendations = []
+                    
+                    # 1. Screen sharing counterfactual
+                    if in_scr:
+                        z_scr_hyp = 0.0
+                        distance_hyp = np.sqrt(z_amt**2 + z_vel**2 + z_scr_hyp**2)
+                        hyp_risk = max(1.0, min(99.4, (distance_hyp / safe_threshold) * 50))
+                        status_str = "ALLOWED" if hyp_risk <= 70 else "BLOCKED (due to other factors)"
+                        recommendations.append(
+                            f"🔌 **Disable Remote Screen Sharing**: Disabling active remote access apps will drop the security risk factor from 4.0σ to 0.0σ. "
+                            f"Keeping other factors identical, this would reduce the risk score to **{hyp_risk:.1f}%** (Verdict: **{status_str}**)."
+                        )
+                    
+                    # 2. Amount counterfactual
+                    r_amt = 12.25 - z_vel**2 - z_scr**2
+                    if r_amt >= 0:
+                        max_safe_amt = avg_amt + np.sqrt(r_amt) * std_amt
+                        if in_amt > max_safe_amt:
+                            recommendations.append(
+                                f"💸 **Reduce Transaction Amount**: Lower the transaction amount to **₹{int(max_safe_amt):,}** or below (currently **₹{in_amt:,}**). "
+                                f"This will bring the risk score down to **70.0%** (Verdict: **ALLOWED**)."
+                            )
+                    else:
+                        recommendations.append(
+                            "💸 **Reduce Transaction Amount**: Lowering the amount alone is not enough to authorize this transaction. "
+                            "You must first resolve other alerts (such as disabling remote screen sharing)."
+                        )
+                        
+                    # 3. Velocity counterfactual
+                    r_vel = 12.25 - z_amt**2 - z_scr**2
+                    if r_vel >= 0:
+                        max_safe_vel = 1.5 + 1.2 * np.sqrt(r_vel)
+                        if in_txns_60s > max_safe_vel:
+                            recommendations.append(
+                                f"⏳ **Wait Before Retrying**: Wait a short moment to reduce your 60-second transaction frequency to **{max(1, int(max_safe_vel))}** or below (currently **{in_txns_60s}**). "
+                                f"This will drop the risk score to **70.0%** (Verdict: **ALLOWED**)."
+                            )
+                    else:
+                        recommendations.append(
+                            "⏳ **Wait Before Retrying**: Waiting alone is not enough to authorize this transaction. "
+                            "You must also reduce the transaction amount or disable screen sharing."
+                        )
+
+                    rec_html = "<div class='result-card-counterfactual'><h4 style='color:#00f2fe; margin-top:0;'>🛠️ Actions Required to Authorize</h4><ul>"
+                    for rec in recommendations:
+                        rec_html += f"<li style='margin-bottom:10px;'>{rec}</li>"
+                    rec_html += "</ul></div>"
+                    st.markdown(rec_html, unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                    <div class='result-card-counterfactual'>
+                        <h4 style='color:#00f2fe; margin-top:0;'>⚙️ System Status: Safe</h4>
+                        <p style='margin-bottom:0;'>No adjustments are needed. The transaction is within the safe behavioral envelope (Risk: <strong>{final_risk:.1f}%</strong>).</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                # --- DEEP EXPLAINABLE AI (REAL GNNEXPLAINER) ---
+                with st.spinner("Generating Deep Graph Explanations (GNNExplainer)..."):
+                    try:
+                        feature_importances, subgraph_edges = explain_transaction(node_id, epochs=40)
+                        
+                        st.markdown("### 🔍 GNNExplainer Subgraph & Feature Importance")
+                        st.markdown("This section displays the mathematical evidence calculated by PyTorch Geometric GNNExplainer, identifying the exact subgraphs and features driving the graph neural network's node prediction.")
+                        
+                        col_xai1, col_xai2 = st.columns(2)
+                        
+                        with col_xai1:
+                            st.markdown("#### 🔗 GNN Decision Subgraph")
+                            
+                            def short_label(name):
+                                if len(name) > 15:
+                                    if name.startswith('user_'):
+                                        return f"user_{name.split('_')[1][:5]}..."
+                                    if name.startswith('merchant_'):
+                                        return f"merch_{name.split('_')[1][:5]}..."
+                                    if name.startswith('device_'):
+                                        return f"dev_{name.split('_')[1][:5]}..."
+                                    return f"{name[:8]}..."
+                                return name
+                                
+                            fig, ax = plt.subplots(figsize=(6, 4.5), facecolor='#110c18')
+                            ax.set_facecolor('#110c18')
+                            
+                            vis_g = nx.Graph()
+                            for edge in subgraph_edges[:10]:
+                                vis_g.add_edge(edge['source'], edge['target'], weight=edge['importance'])
+                                
+                            pos = nx.spring_layout(vis_g, seed=42)
+                            
+                            node_colors = []
+                            for n in vis_g.nodes():
+                                if str(n) == node_id:
+                                    node_colors.append('#ff007f' if final_risk > 70 else '#00ff80')
+                                elif str(n).startswith('user_'):
+                                    node_colors.append('#3b82f6')
+                                elif str(n).startswith('merchant_'):
+                                    node_colors.append('#ec4899')
+                                elif str(n).startswith('device_'):
+                                    node_colors.append('#f59e0b')
+                                else:
+                                    node_colors.append('#94a3b8')
+                                    
+                            nx.draw_networkx_nodes(vis_g, pos, node_color=node_colors, node_size=600, ax=ax)
+                            
+                            widths = [max(1.0, vis_g[u][v]['weight'] * 6.0) for u, v in vis_g.edges()]
+                            nx.draw_networkx_edges(vis_g, pos, width=widths, edge_color='#6366f1', alpha=0.8, ax=ax)
+                            
+                            labels = {n: short_label(str(n)) for n in vis_g.nodes()}
+                            nx.draw_networkx_labels(vis_g, pos, labels=labels, font_size=8, font_color='#ffffff', font_weight='bold', ax=ax)
+                            
+                            ax.axis('off')
+                            plt.tight_layout()
+                            st.pyplot(fig)
+                            st.caption("💡 Line thickness shows GNNExplainer's structural path influence score. Pink/red indicates target transaction is anomalous/fraud, green is legitimate.")
+                            
+                        with col_xai2:
+                            st.markdown("#### 📊 GNN Feature Influence")
+                            
+                            fig_feat, ax_feat = plt.subplots(figsize=(6, 4.5), facecolor='#110c18')
+                            ax_feat.set_facecolor('#110c18')
+                            
+                            top_feats = feature_importances[:5]
+                            feat_names = [f['feature'] for f in top_feats]
+                            importances = [f['importance'] for f in top_feats]
+                            
+                            y_pos = np.arange(len(feat_names))
+                            colors = ['#ff007f' if i == 0 else '#7928ca' for i in range(len(feat_names))]
+                            
+                            ax_feat.barh(y_pos, importances, align='center', color=colors, height=0.45)
+                            ax_feat.set_yticks(y_pos)
+                            ax_feat.set_yticklabels(feat_names, color='#e2e8f0', fontsize=9)
+                            ax_feat.invert_yaxis()
+                            ax_feat.set_xlabel('Normalized GNN Feature Weight', color='#94a3b8', fontsize=9)
+                            ax_feat.xaxis.label.set_color('#94a3b8')
+                            ax_feat.tick_params(colors='#94a3b8', labelsize=8)
+                            for spine in ax_feat.spines.values():
+                                spine.set_edgecolor('#2d1f3f')
+                                
+                            plt.tight_layout()
+                            st.pyplot(fig_feat)
+                            st.caption("💡 Normalized score (0 to 1) representing feature mask weights computed by GNNExplainer epochs optimization.")
+                            
+                    except Exception as e:
+                        st.warning(f"Unable to load PyG GNNExplainer visualization: {e}")
+
 with tab2:
     st.markdown("### 🗄️ Recent Network Activity")
-    st.dataframe(df_display.tail(15))
+    st.dataframe(df_display.tail(15))

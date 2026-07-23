@@ -118,7 +118,7 @@ def parse_timestamp(ts):
 
 df["timestamp_seconds"] = df["timestamp"].apply(parse_timestamp)
 df.drop(columns=["timestamp"], inplace=True)
-print(f"[TIMESTAMP] Parsed 'timestamp' → 'timestamp_seconds'")
+print(f"[TIMESTAMP] Parsed 'timestamp' -> 'timestamp_seconds'")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -179,4 +179,4 @@ for c in feature_cols:
 # ─────────────────────────────────────────────────────────────────────────────
 os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
 df.to_csv(OUTPUT_PATH, index=False)
-print(f"\n[SAVED] → {OUTPUT_PATH}")
+print(f"\n[SAVED] -> {OUTPUT_PATH}")

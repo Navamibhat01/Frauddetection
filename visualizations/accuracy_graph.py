@@ -16,7 +16,7 @@ from matplotlib.gridspec import GridSpec
 # ─────────────────────────────────────────────────────────────────────────────
 # PATHS
 # ─────────────────────────────────────────────────────────────────────────────
-BASE_DIR    = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+BASE_DIR    = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 OUTPUT_DIR  = os.path.join(BASE_DIR, "data", "output")
 OUTPUT_PATH = os.path.join(OUTPUT_DIR, "accuracy_graph.png")
 
@@ -150,5 +150,5 @@ ax4.axvline(x=0.99, color=GRID_COLOR, lw=1, linestyle='--', alpha=0.6)
 # ─────────────────────────────────────────────────────────────────────────────
 plt.savefig(OUTPUT_PATH, dpi=150, bbox_inches='tight',
             facecolor=BG_COLOR, edgecolor='none')
-print(f"[SAVED] → {OUTPUT_PATH}")
+print(f"[SAVED] -> {OUTPUT_PATH}")
 plt.close()

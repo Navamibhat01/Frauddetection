@@ -42,7 +42,7 @@ for node in all_nodes:
         txn_indices.append(idx)
         true_labels.append(txn_lbl_map[node_str])
 
-print(f"✅ Mapped {len(txn_indices)} transactions with features.")
+print(f"[SUCCESS] Mapped {len(txn_indices)} transactions with features.")
 
 # Tensors
 x = torch.tensor(StandardScaler().fit_transform(x_feats), dtype=torch.float)
@@ -67,7 +67,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
 # 4. Unsupervised Training
 print("Training Adaptive GNN...")
-for epoch in range(101):
+for epoch in range(301):
     model.train()
     optimizer.zero_grad()
     z = model(x, edge_index)
@@ -84,11 +84,16 @@ for epoch in range(101):
     (pos_loss + neg_loss).backward()
     optimizer.step()
 
-# 5. Save Transaction Embeddings
+# 5. Save Transaction Embeddings & Model Checkpoint
 model.eval()
 with torch.no_grad():
     final_z = model(x, edge_index).numpy()
 
 np.save(TXN_EMB_PATH, final_z[txn_indices])
 np.save(LBL_PATH, np.array(true_labels))
-print(f"✅ DONE: Embeddings saved to {TXN_EMB_PATH}")
+
+MODEL_STATE_PATH = os.path.join(BASE_DIR, "data", "graph", "gnn_encoder.pth")
+torch.save(model.state_dict(), MODEL_STATE_PATH)
+
+print(f"[SUCCESS] DONE: Embeddings saved to {TXN_EMB_PATH}")
+print(f"[SUCCESS] DONE: Model state dict saved to {MODEL_STATE_PATH}")
